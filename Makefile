@@ -5,7 +5,10 @@ PROGRAM = use_halloc.out
 SRC = use_halloc.c
 HALLOC = halloc.c
 
-.PHONY: debug build clean
+.PHONY: run debug build clean
+
+run: ${PROGRAM}
+	./$< ${a}
 
 debug: ${SRC} ${HALLOC}
 	${CC} -g $^ -o ${PROGRAM}
