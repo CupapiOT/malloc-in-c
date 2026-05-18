@@ -1,74 +1,23 @@
 #define _GNU_SOURCE // We need this for sbrk() to be declared.
-#include "halloc.h"
-#include <assert.h>
-#include <ctype.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define META_SIZE sizeof(struct heapchunk_meta)
-// #define HEAP_SIZE 4096
 
 struct heapchunk_meta {
   struct heapchunk_meta *next;
   size_t size;
-  bool free;
-  unsigned short magic;
+  unsigned short free;
 };
 typedef struct heapchunk_meta heapchunk_meta;
 
-// struct heap {
-//   void *first_chunk;
-//   size_t available;
-// };
-//
-// void init_heap() {
-//   global_heap_base = sbrk(HEAP_SIZE);
-//   global_heap_base->available = 4096;
-//   global_heap_base->first_chunk = sbrk(0);
-// }
-
 heapchunk_meta *global_heap_base = NULL;
-
-void inspect_chunk(heapchunk_meta *chunk) {
-  printf("chunk = %p\n", (void *)chunk);
-  printf("chunk->next = %p\n", (void *)chunk->next);
-  printf("chunk->size = %zu\n", chunk->size);
-  printf("chunk->free = %s\n", chunk->free ? "true" : "false");
-  printf("bytes = ");
-  unsigned char *bytes = (unsigned char *)(chunk + 1);
-  for (size_t i = 0; i < chunk->size; i++) {
-    if (isalnum(bytes[i]))
-      printf("%c ", bytes[i]);
-    else
-      printf("0x%02x ", bytes[i]);
-  }
-  if (bytes[chunk->size - 2] != '\n')
-    printf("\n");
-}
-
-void inspect_all_chunks() {
-  heapchunk_meta *curr_chunk = global_heap_base;
-  size_t counter = 0;
-  printf("\n============================");
-  printf("\n===== INSPECTION START =====");
-  printf("\n============================\n\n");
-  while (curr_chunk != NULL) {
-    printf("========= Chunk %02zu =========\n", counter++);
-    inspect_chunk(curr_chunk);
-    curr_chunk = curr_chunk->next;
-  }
-  printf("\n============================");
-  printf("\n=====  INSPECTION END  =====");
-  printf("\n============================\n");
-}
 
 heapchunk_meta *find_free_chunk(heapchunk_meta **last_chunk, size_t size) {
   heapchunk_meta *curr_chunk = global_heap_base;
   while (curr_chunk != NULL &&
-         !(curr_chunk->free == true && curr_chunk->size >= size)) {
+         !(curr_chunk->free == 1 && curr_chunk->size >= size)) {
     *last_chunk = curr_chunk;
     curr_chunk = curr_chunk->next;
   };
@@ -78,22 +27,16 @@ heapchunk_meta *find_free_chunk(heapchunk_meta **last_chunk, size_t size) {
 heapchunk_meta *create_chunk(size_t size) {
   heapchunk_meta *new_chunk = sbrk(0);
   void *request = sbrk(META_SIZE + size);
-  assert((void *)new_chunk == request); // Not thread safe.
-  if (new_chunk == (void *)-1)
+  if (new_chunk == (void *)-1 || new_chunk != request)
     return NULL;
   new_chunk->size = size;
-  new_chunk->free = false;
+  new_chunk->free = 0;
   new_chunk->next = NULL;
-  new_chunk->magic = 0x7777;
   return new_chunk;
 }
 
 void append_chunk(heapchunk_meta *append_to, heapchunk_meta *chunk) {
   if (append_to == chunk) {
-    fprintf(stderr,
-            "WARN: Attempted to append a chunk to itself, which would cause an "
-            "infinite loop when searching. Aborting append_chunk(%p, %p).\n",
-            (void *)append_to, (void *)chunk);
     return;
   }
   if (append_to != NULL) {
@@ -107,7 +50,7 @@ void append_chunk(heapchunk_meta *append_to, heapchunk_meta *chunk) {
   curr_chunk->next = chunk;
 }
 
-void *heapmalloc(size_t size) {
+void *malloc(size_t size) {
   if (size == 0)
     return NULL;
 
@@ -122,12 +65,11 @@ void *heapmalloc(size_t size) {
       append_chunk(last_chunk, chunk);
     }
     // Can split blocks here.
-    chunk->free = false;
+    chunk->free = 0;
   } else {
     chunk = create_chunk(size);
     if (chunk == NULL)
       return NULL;
-    chunk->magic = 0xBA5E;
     global_heap_base = chunk;
   }
   return chunk + 1;
@@ -135,37 +77,41 @@ void *heapmalloc(size_t size) {
 
 heapchunk_meta *get_chunk_ptr(void *ptr) { return (heapchunk_meta *)ptr - 1; }
 
-void heapfree(void *ptr) {
+void free(void *ptr) {
   // Valid to call free with a NULL pointer.
   if (ptr == NULL)
     return;
 
   heapchunk_meta *chunk = get_chunk_ptr(ptr);
-  assert(chunk->free == false);
-  chunk->free = true;
+  if (chunk->free != 0) {
+    char *err_msg = "free(): double free detected.\n";
+    write(STDERR_FILENO, err_msg, strlen(err_msg));
+    abort(); // A double free aborts the program.
+  }
+  chunk->free = 1;
   unsigned char garbage = 0xFE;
   memset(ptr, garbage, chunk->size);
 }
 
-void *heaprealloc(void *ptr, size_t size) {
+void *realloc(void *ptr, size_t size) {
   if (ptr == NULL)
-    return heapmalloc(size);
+    return malloc(size);
   heapchunk_meta *old_chunk_meta = get_chunk_ptr(ptr);
   if (size <= old_chunk_meta->size) {
     // TODO: Implement resizing for smaller sizes.
     return ptr;
   }
-  void *new_chunk = heapmalloc(size);
+  void *new_chunk = malloc(size);
   if (new_chunk == NULL)
     return NULL; // TODO: Set errno on failure.
   memcpy(new_chunk, ptr, old_chunk_meta->size);
-  heapfree(ptr);
+  free(ptr);
   return new_chunk;
 }
 
-void *heapcalloc(size_t num_elements, size_t size_elements) {
+void *calloc(size_t num_elements, size_t size_elements) {
   size_t size = num_elements * size_elements; // TODO: Check for overflow.
-  void *new_chunk = heapmalloc(size);
+  void *new_chunk = malloc(size);
   if (new_chunk == NULL)
     return NULL; // TODO: Set errno on failure.
   memset(new_chunk, 0, size);

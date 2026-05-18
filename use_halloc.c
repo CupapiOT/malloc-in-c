@@ -11,7 +11,7 @@ char *allocate_string(char string[]) {
   char *str = heapmalloc(string_len);
 
   if (str == NULL) {
-    fprintf(stderr, "Failed to malloc!\n");
+    fprintf(stderr, "Failed to heapmalloc!\n");
     return NULL;
   }
 
@@ -34,22 +34,44 @@ char *mallocate_string(char string[]) {
 
 int main() {
   char msg1_str[] = "100";
-  char *msg = allocate_string(msg1_str);
+  char *msg1 = allocate_string(msg1_str);
+
+  size_t new_msg1_len = strlen(msg1_str) + 2;
+  char *tmp1 = heaprealloc(msg1, new_msg1_len);
+  if (tmp1 == NULL) {
+    fprintf(stderr, "Failed to heaprealloc!");
+    return 1;
+  }
+  msg1 = tmp1;
+  char *msg1_m = mallocate_string(msg1_str);
+  char *tmp_m = realloc(msg1_m, new_msg1_len);
+  if (tmp_m == NULL) {
+    fprintf(stderr, "Failed to realloc!");
+    return 1;
+  }
+  msg1_m = tmp_m;
+  assert(strcmp(msg1, msg1_m) == 0);
 
   char msg3_str[] = "3";
   char *msg3 = allocate_string(msg3_str);
-  heapfree(msg);
+  heapfree(msg1);
 
-  char msg2_str[] = "20";
+  char msg2_str[] = "2000";
   char *msg2 = allocate_string(msg2_str);
   heapfree(msg2);
 
   char msg4_str[] = "400";
   char *msg4 = allocate_string(msg4_str);
-  inspect_all_chunks();
   heapfree(msg3);
   heapfree(msg4);
+  int *nums = heapcalloc(10, sizeof *nums);
+  nums[0] = 2;
+  nums[1] = 3;
+  nums[2] = 5;
+  nums[3] = 7;
+  inspect_all_chunks();
 
+  printf("PROGRAM SUCCESS\n");
   return EXIT_SUCCESS;
 }
 
