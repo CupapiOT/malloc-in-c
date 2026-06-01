@@ -6,7 +6,7 @@ SRC = custom-malloc.c
 BIN = custom-malloc.so
 
 CCTEST = gcc
-CCTESTFLAGS = -std=c99 -Wall -Wextra -Wshadow -Wfloat-equal -Wformat=2 -g -O2 -pedantic
+CCTESTFLAGS = -std=c2x -Wall -Wextra -Wshadow -Wfloat-equal -Wformat=2 -g -O2 -pedantic
 DGB = gdb
 TEST_PROGRAM = use_halloc.out
 TEST_FILE = use_halloc.c
@@ -32,4 +32,7 @@ ${TEST_PROGRAM}: ${TEST_FILE} ${DEBUG_FILE}
 	${CCTEST} ${CCTESTFLAGS} $^ -o ${TEST_PROGRAM}
 
 clean:
+	rm -f *.o *.out
+
+clean_all:
 	rm -f *.o *.out *.so
