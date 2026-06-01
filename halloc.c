@@ -2,6 +2,7 @@
 #include "halloc.h"
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -30,6 +31,9 @@
 //   global_heap_base->first_chunk = global_heap_base;
 // }
 
+static const unsigned char CANARY[] = {0xCA, 0xFE, 0xBA, 0xBE};
+static const unsigned char CANARY_SIZE = sizeof(CANARY);
+
 struct heapchunk_meta {
   struct heapchunk_meta *next;
   size_t size;
@@ -55,7 +59,7 @@ static void inspect_chunk(heapchunk_meta *chunk) {
   printf("bytes = ");
   unsigned char *bytes = (unsigned char *)(chunk + 1);
   size_t bytes_to_print = chunk->size <= 32 ? chunk->size : 32;
-  for (size_t i = 0; i < bytes_to_print; i++) {
+  for (size_t i = 0; i < bytes_to_print + 2 * CANARY_SIZE; i++) {
     if (isalnum(bytes[i]))
       printf("%c ", bytes[i]);
     else
@@ -176,16 +180,18 @@ static heapchunk_meta *create_chunk(size_t size) {
   if (curr == (void *)-1)
     return NULL;
 
-  size_t ptr_addr = (size_t)curr + META_SIZE;
+  size_t ptr_addr = (size_t)curr + META_SIZE + CANARY_SIZE;
   size_t padding =
       (ALIGN_BYTES - (ptr_addr & (ALIGN_BYTES - 1))) & (ALIGN_BYTES - 1);
-  size_t total_size = META_SIZE + padding + size;
+  size_t total_size = META_SIZE + padding + size + CANARY_SIZE * 2;
   void *request = sbrk(total_size);
 
   assert(curr == request);             // Not thread safe.
   memset(curr, PADDING_BYTE, padding); // REMOVE IN NON-DEBUG MODE
 
   heapchunk_meta *new_chunk = (void *)((char *)curr + padding);
+  memcpy(new_chunk + 1, CANARY, CANARY_SIZE);
+  memcpy((char *)(new_chunk + 1) + size + CANARY_SIZE, CANARY, CANARY_SIZE);
 
   new_chunk->next = NULL;
   new_chunk->size = size;
@@ -237,11 +243,11 @@ void *heapmalloc(size_t size) {
     chunk->magic = 0xBA5E;
     global_heap_base = chunk;
   }
-  return chunk + 1;
+  return (char *)(chunk + 1) + CANARY_SIZE;
 }
 
 static heapchunk_meta *get_chunk_ptr(void *ptr) {
-  return (heapchunk_meta *)ptr - 1;
+  return (heapchunk_meta *)((char *)ptr - (META_SIZE + CANARY_SIZE));
 }
 
 // TODO: Implement merging continuous chunks.
@@ -252,6 +258,16 @@ void heapfree(void *ptr) {
 
   heapchunk_meta *chunk = get_chunk_ptr(ptr);
   assert(chunk->free == false);
+  unsigned char *canary_before_ptr = (unsigned char *)ptr - 4;
+  unsigned char *canary_after_ptr = (unsigned char *)ptr + chunk->size;
+  for (unsigned short i = 0; i < CANARY_SIZE; i++) {
+    unsigned char before_char = canary_before_ptr[i];
+    unsigned char after_char = canary_after_ptr[i];
+    if (before_char != CANARY[i] || after_char != CANARY[i]) {
+      errno = -1; // no need for this in prod version
+      // Prod version will abort with a message.
+    }
+  }
   chunk->free = true;
   memset(ptr, FREE_BYTE, chunk->size);
 }

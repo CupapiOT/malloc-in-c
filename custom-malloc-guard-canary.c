@@ -1,3 +1,10 @@
+/**
+ * INFO: A version of ./custom-malloc.c that implements guard canaries.
+ * It is not implemented in the "real" version because over/underflowing
+ * allocated buffers should really be undefined behavior, i.e. it doesn't
+ * always crash.
+ */
+
 #define _GNU_SOURCE // We need this for sbrk() to be declared.
 #include <stddef.h>
 #include <stdlib.h>
@@ -7,6 +14,9 @@
 #define ALIGN_BYTES _Alignof(max_align_t) // C11 or above.
 #define META_SIZE sizeof(struct heapchunk_meta)
 #define FREE_BYTE 0xFE
+
+static const unsigned char CANARY[] = {0xCA, 0xFE, 0xBA, 0xBE};
+static const unsigned char CANARY_SIZE = sizeof(CANARY);
 
 struct heapchunk_meta {
   struct heapchunk_meta *next;
@@ -32,16 +42,18 @@ static heapchunk_meta *find_free_chunk(heapchunk_meta **last_chunk,
 static heapchunk_meta *create_chunk(size_t size) {
   void *curr = sbrk(0);
 
-  size_t ptr_addr = (size_t)curr + META_SIZE;
+  size_t ptr_addr = (size_t)curr + META_SIZE + CANARY_SIZE;
   size_t padding =
       (ALIGN_BYTES - (ptr_addr & (ALIGN_BYTES - 1))) & (ALIGN_BYTES - 1);
-  size_t total_size = META_SIZE + padding + size;
+  size_t total_size = META_SIZE + padding + size + CANARY_SIZE * 2;
   void *request = sbrk(total_size);
 
   if (curr == (void *)-1 || curr != request)
     return NULL;
 
   heapchunk_meta *new_chunk = (void *)((char *)curr + padding);
+  memcpy(new_chunk + 1, CANARY, CANARY_SIZE);
+  memcpy((char *)(new_chunk + 1) + size + CANARY_SIZE, CANARY, CANARY_SIZE);
 
   new_chunk->next = NULL;
   new_chunk->size = size;
@@ -90,11 +102,11 @@ void *malloc(size_t size) {
       return NULL;
     global_heap_base = chunk;
   }
-  return chunk + 1;
+  return (char *)(chunk + 1) + CANARY_SIZE;
 }
 
 static heapchunk_meta *get_chunk_ptr(void *ptr) {
-  return (heapchunk_meta *)ptr - 1;
+  return (heapchunk_meta *)((char *)ptr - (META_SIZE + CANARY_SIZE));
 }
 
 void free(void *ptr) {
@@ -106,10 +118,21 @@ void free(void *ptr) {
   if (chunk->free != 0) {
     char *err_msg = "free(): double free detected.\n";
     write(STDERR_FILENO, err_msg, strlen(err_msg));
-    abort(); // A double free aborts the program. Apparently this should
+    abort(); // A double free aborts the program. Apparently this should,
              // however, be undefined behavior.
   }
-
+  unsigned char *canary_before_ptr = (unsigned char *)ptr - CANARY_SIZE;
+  unsigned char *canary_after_ptr = (unsigned char *)ptr + chunk->size;
+  for (unsigned short i = 0; i < CANARY_SIZE; i++) {
+    unsigned char before_char = canary_before_ptr[i];
+    unsigned char after_char = canary_after_ptr[i];
+    if (before_char != CANARY[i] || after_char != CANARY[i]) {
+      const char *overflow_errmsg =
+          "*** buffer overflow detected ***: terminated\n";
+      write(STDERR_FILENO, overflow_errmsg, strlen(overflow_errmsg));
+      abort();
+    }
+  }
   chunk->free = 1;
   memset(ptr, FREE_BYTE, chunk->size);
 }

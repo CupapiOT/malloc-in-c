@@ -1,5 +1,6 @@
 #include "halloc.h"
 #include <assert.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +59,36 @@ size_t random_at_most(size_t max) {
     x = rand();
   } while (num_rand - defect <= (size_t)x);
   return (x / bin_size) + 1;
+}
+
+int test_overflow_guards() {
+  printf("TEST_OVERFLOW_GUARDS START\n");
+
+  size_t violate_size = 4;
+  void *violate = heapmalloc(violate_size);
+  if (violate == NULL) {
+    fprintf(stderr, "Failed to heapmalloc!\n");
+    abort();
+  }
+
+  void *regular = heapmalloc(4);
+  memset(violate, 0x69, violate_size + 2);
+  // memset((char *)violate - violate_size, 0x69, violate_size);
+
+  // If the test is successful, this will set errno to -1.
+  // In `./custom-malloc.c` however, it will abort.
+  heapfree(violate);
+
+  heapfree(regular);
+
+  int exit_code = EXIT_FAILURE;
+  if (errno == -1)
+    exit_code = EXIT_SUCCESS;
+  if (exit_code == EXIT_SUCCESS)
+    printf("TEST_OVERFLOW_GUARDS SUCCESS --- ERRNO WAS SET TO -1\n");
+  else
+    printf("TEST_OVERFLOW_GUARDS FAILURE --- ERRNO NOT SET TO -1\n");
+  return exit_code;
 }
 
 int test_16byte_alignment() {
@@ -168,4 +199,6 @@ int main() {
   test_realloc_and_calloc();
 
   test_16byte_alignment();
+
+  test_overflow_guards();
 }
